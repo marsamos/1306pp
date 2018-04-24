@@ -1,4 +1,8 @@
+*.out
+*.mod
 *.o
 *.x
-*.a
-*.log
+*.xyz
+*.dSYM
+*.swp
+*.so

@@ -4,6 +4,548 @@ module routines
 
  contains
 
+  function cross(a,b) result(res)
+   implicit none
+   real, dimension(3) :: a, b
+   real, dimension(3) :: res
+
+   res(1) = a(2)*b(3) - a(3)*b(2)
+   res(2) = a(3)*b(1) - a(1)*b(3)
+   res(3) = a(1)*b(2) - a(2)*b(1)
+  end function cross
+
+
+  real function inner_prod(A,B)
+   implicit none
+   real,dimension(3) :: A, B 
+   integer :: i
+   
+   inner_prod = 0.0
+   do i = 1,3
+      inner_prod = inner_prod+A(i)*B(i)
+   end do
+  end function inner_prod
+
+
+  real function norm(A)
+   implicit none
+   real, dimension(3) :: A
+
+   norm = sqrt(real(inner_prod(A,A)))
+  end function norm
+
+
+  real function atang(d)
+  !! atan function taking into account NaN and Infinity issues
+   implicit none
+   real :: d, pi
+   
+   pi = 4.0*atan(1.0)
+
+   !! if d = NaN (not even equal to itself) then it comes from 1/0
+   if (d /= d) then
+     atang = 0.0
+   !! is infinity
+   elseif ( d**2+1 == d ) then
+     atang = pi/2.0
+   !! is -infinity
+   elseif (d**2+1 == -d ) then
+     atang = -pi/2.0
+   else
+     atang = atan(d)
+   endif
+
+  end function atang
+
+
+  subroutine make_connectivity(nat,coords,types,color_cutoff,connect,lab,color)
+   implicit none
+   integer, intent(in) :: nat
+   real, intent(in) :: coords(:,:)
+   integer, intent(inout) :: types(:)
+   real, intent(in) :: color_cutoff(:,:)
+   integer, allocatable, intent(out) :: connect(:,:)
+   integer, allocatable, intent(out) :: lab(:), color(:)
+   integer, allocatable :: sorted_from_global_color(:), &
+                           global_from_sorted_color(:)
+   real :: dij
+   integer :: i, j, k
+   
+   allocate( connect(1:nat, 1:nat) )
+   connect(:,:) = 0
+   allocate(lab(1:nat))
+   lab(:) = 0
+   allocate(color(1:nat))
+   color(:) = 0
+   allocate(sorted_from_global_color(1:nat))
+   allocate(global_from_sorted_color(1:nat))
+
+   call sort_property(nat,types,color,global_from_sorted_color,sorted_from_global_color)
+   do i=1,nat
+     do j=i+1, nat
+       dij=0.0
+       do k = 1,3
+         dij = dij + (coords(j,k)-coords(i,k))**2
+       end do
+       dij = sqrt(dij)
+       connect(i,j) = NINT( 0.5*erfc(dij-color_cutoff( types(i),types(j) )))
+       connect(j,i) = NINT( 0.5*erfc(dij-color_cutoff( types(j),types(i) )))
+     end do
+   end do
+
+   do i=1,nat
+     lab(i)=global_from_sorted_color(i)-1
+   enddo
+  
+   call sort_to_canon_typ(nat,types,sorted_from_global_color)
+
+  end subroutine make_connectivity
+
+
+   subroutine sort_property(n,vertex_property,color,&
+                            unsorted_from_sorted,sorted_from_unsorted)
+   implicit none
+
+   integer, intent(inout):: vertex_property(1:n)
+   integer, intent(out) :: sorted_from_unsorted(1:n), unsorted_from_sorted(1:n)
+   integer, intent(out) :: color(1:n)
+
+   integer, allocatable :: copy_vertex_property(:)
+   integer :: i,j,k, temp, n
+
+   !write(*,*) "from sort_property index"
+
+   n=size(vertex_property,1)
+
+   !write(*,*) "n=", n
+   allocate(copy_vertex_property(1:n))
+
+   copy_vertex_property(:)=vertex_property(:)
+
+   do j=1,n
+     sorted_from_unsorted(j)=0
+     unsorted_from_sorted(j)=0
+   enddo
+
+   do i=1,n
+    do j=1,n-1
+     if(vertex_property(j)>vertex_property(j+1)) then
+      temp=vertex_property(j)
+      vertex_property(j)=vertex_property(j+1)
+      vertex_property(j+1)=temp
+     endif
+    enddo
+   enddo
+
+   k=1
+   do i=1,n
+     do j=1,n
+       if((vertex_property(k)==copy_vertex_property(j)).and.&
+                                  (sorted_from_unsorted(j)==0)) then
+         sorted_from_unsorted(j)=k
+         unsorted_from_sorted(k)=j
+         k=k+1
+       endif
+     enddo
+   enddo
+
+   !write(*,*) "original vertex color, actual vertex color, sorted from unsorted"
+   !write(*,*) ""
+   !do i=1,n
+   !write(*,*) copy_vertex_property(i), vertex_property(i),sorted_from_unsorted(i), &
+   !     unsorted_from_sorted(i)
+   !enddo
+
+   color(:)=vertex_property(:)
+
+   do i=1,n-1
+     if(vertex_property(i)/=vertex_property(i+1)) color(i)=0
+   enddo
+   color(n)=0
+   !do i=1,n
+   !  write(*,*) "ooo", vertex_property(i), color(i)
+   !enddo 
+
+   deallocate(copy_vertex_property)
+end subroutine
+
+ 
+
+  subroutine rotate(A,x,y,z)
+  !! rotation matrix: R A = A'
+  !! x, y, z are rotation angles around each axis
+   implicit none
+   real, dimension(3), intent(inout) :: A
+   real, intent(in) :: z, x, y
+   real, dimension(3,3) :: R
+
+   R(1,1) = cos(z)*cos(y) - cos(x)*sin(z)*sin(y)
+   R(1,2) = -cos(z)*sin(y) - cos(x)*sin(z)*cos(y)
+   R(1,3) = sin(z)*sin(x)
+   R(2,1) = sin(z)*cos(y) + cos(x)*cos(z)*sin(y)
+   R(2,2) = -sin(z)*sin(y) + cos(x)*cos(z)*cos(y)
+   R(2,3) = -cos(z)*sin(x)
+   R(3,1) = sin(y)*sin(x)
+   R(3,2) = cos(y)*sin(x)
+   R(3,3) = cos(x)
+
+   A = matmul(R,A)
+  end subroutine rotate
+
+
+  subroutine set_color_cutoff(color_cutoff)
+  !! set the color_cutoff matrix
+  implicit none
+  real, allocatable, intent(out) :: color_cutoff(:,:)
+  integer :: n_color
+  integer :: i, j
+  real :: dij
+
+  open(unit=555,file='neighbor_table.dat',status='old',action='read')
+  n_color = 3
+  allocate(color_cutoff(1:n_color,1:n_color))
+  color_cutoff(:,:) = 0.0
+  read(555,*)
+  do while(.true.)
+    read(555,*,end=200) i, j, dij
+    color_cutoff(i,j) = dij
+    color_cutoff(j,i) = dij
+  end do
+  200 continue
+  end subroutine set_color_cutoff
+
+
+  subroutine gen_basis(nat,coords,basis)
+  !! find a "typical vector" of the system, 
+  !! sum of all contributions of each components is the typical vector's component in
+  !! that direction. Then find typical rotation around each axis and apply it to the 
+  !! typical vector around each corresponding axis separately. This should give 4 vectors:
+  !! namely, the typical one, the one rotated around z, y, and x. Could check which 
+  !! combination is ok for basis.
+
+  !! unused, philosophy of basis has been changed
+   implicit none
+   integer, intent(in) :: nat
+   real, intent(in) :: coords(:,:)
+   real, intent(out) :: basis(3,3)
+   real :: typical(3), typical_o(3)
+   real :: dum, pi2, thetaz, thetax, thetay
+   integer :: i
+
+ !! pi/2
+  pi2 = 2.0*atan(1.0)
+
+ !! sum all components in the cluster
+   do i=1, nat
+     typical(1) = typical(1) + coords(i,1)
+     typical(2) = typical(2) + coords(i,2)
+     typical(3) = typical(3) + coords(i,3)
+   end do
+   typical = typical/norm(typical)
+   typical_o(:) = typical(:)
+  !! find rotation in the xy plane (around z axis):
+  !! theta = pi/2 - sum_i ( atan( y_i / x_i ) )    ( what about abs(atan()) ;; and 1/nat?)
+   thetaz = 0.0
+   do i=1,nat
+     dum = coords(i,2) / coords(i,1)
+     dum = pi2 - atang(dum)
+     thetaz = thetaz+dum
+   end do
+
+  !! find rotation in the yz plane (around x axis):
+  !! theta = pi/2 - sum_i ( atan( z_i / y_i ) )    ( what about abs(atan()) ;; and 1/nat?)
+   thetax = 0.0
+   do i=1,nat
+     dum = coords(i,3) / coords(i,2)
+     dum = pi2 - atang(dum)
+     thetax = thetax+dum
+   end do
+  
+  !! find rotation in the xz plane (around y axis):
+  !! theta = pi/2 - sum_i ( atan( z_i / x_i ) )    ( what about abs(atan()) ;; and 1/nat?)
+   thetay = 0.0
+   do i=1,nat
+     dum = coords(i,3) / coords(i,1)
+     dum = pi2 - atang(dum)
+     thetay = thetay+dum
+   end do
+
+  !! rotate typical around each axis
+   call rotate(typical,0.0,0.0,thetaz)
+   basis(1,:) = typical(:)
+   typical = typical_o
+
+   call rotate(typical,thetax,0.0,0.0)
+   basis(2,:) = typical(:)
+   typical = typical_o
+
+   call rotate(typical,0.0,thetay,0.0)
+   basis(3,:) = typical(:)
+   typical = typical_o
+
+  end subroutine gen_basis
+
+
+  subroutine order_by_distance(nat,coords,A)
+  !! generates an order list stored in first element of A. second is the distance.
+  !! does not actually impose any order.
+   implicit none
+   integer, intent(in) :: nat
+   real, intent(in) :: coords(:,:)
+   real, allocatable, intent(out) :: A(:,:)
+
+   integer :: i
+   real :: dum
+
+   allocate(A(1:nat,1:2))
+   A(:,:) = 0.0
+!   do i =1, ev_init_nat
+!    write(*,*) (A(i,j),j=1,2)
+!   end do
+   do i=1,nat
+     dum = ( coords(1,1) - coords(i,1) )**2 +&
+           ( coords(1,2) - coords(i,2) )**2 +&
+           ( coords(1,3) - coords(i,3) )**2
+     A(i,2) = dum**0.5
+     A(i,1) = int(i)
+
+   end do
+!   do i =1, ev_init_nat
+!    write(*,*) (A(i,j),j=1,2)
+!   end do
+   !call Pancake_sort(A(:,4))
+   call sort_row(A)
+!   write(*,*)
+!   do i =1, ev_init_nat
+!    write(*,*) (A(i,j),j=1,2)
+!   end do
+
+  end subroutine order_by_distance
+
+
+   subroutine sort_row(A)
+   ! sorts rows in matrix A, by the second element, from low to high
+    implicit none
+    real,intent(inout) :: A(:,:)
+    real:: buf(2)
+    integer :: nsize, irow, krow
+
+    nsize = size(A,1)
+
+    do irow = 1, nsize
+        krow = minloc( A( irow:nsize, 2 ), dim=1 ) + irow - 1
+
+        buf( : )     = A( irow, : )
+        A( irow, : ) = A( krow, : )
+        A( krow, : ) = buf( : )
+    enddo
+   end subroutine sort_row
+
+
+subroutine Pancake_sort(a)
+ 
+  real, intent(in out) :: a(:)
+  integer :: i, maxpos
+ 
+  write(*,*) a
+  do i = size(a), 2, -1
+ 
+! Find position of max number between index 1 and i
+    maxpos = maxloc(a(1:i), 1)
+ 
+! is it in the correct position already?   
+    if (maxpos == i) cycle
+ 
+! is it at the beginning of the array? If not flip array section so it is
+    if (maxpos /= 1) then
+      a(1:maxpos) = a(maxpos:1:-1)
+      write(*,*) a
+    end if
+ 
+! Flip array section to get max number to correct position      
+    a(1:i) = a(i:1:-1)
+    write(*,*) a
+  end do
+ 
+end subroutine Pancake_sort
+
+
+
+  subroutine sort_to_canon(nat,coords,types,canon_labels)
+   ! sort vectors in a cluster into the canonical order
+   implicit none
+   integer, intent(in) :: nat
+   real, dimension(:,:),intent(inout) :: coords
+   integer, dimension(:),intent(inout) :: types
+!   real, allocatable ,intent(out) :: coords1(:,:)
+   integer, dimension(nat), intent(in) :: canon_labels
+
+   real, dimension(nat,3) :: coords_copy
+   real, dimension(nat) :: types_copy
+   integer :: i
+  
+!   allocate(coords1(1:nat,1:3))
+   do i = 1, nat
+     coords_copy(i,:) = coords(i,:)
+     types_copy(i) = types(i)
+   end do
+
+   do i = 1, nat
+      coords(i,:) = coords_copy( canon_labels( i ), : )
+      types(i) = types_copy( canon_labels( i ) )
+   end do
+  end subroutine sort_to_canon
+
+
+  subroutine sort_to_canon_typ(nat,types,canon_labels)
+   ! sort types in a cluster into the canonical order
+   implicit none
+   integer, intent(in) :: nat
+   integer, dimension(nat),intent(inout) :: types
+   integer, dimension(nat), intent(in) :: canon_labels
+
+   real, dimension(nat) :: types_copy
+   integer :: i
+  
+   types_copy(:) = types(:)
+   do i = 1, nat
+      types(i) = types_copy( canon_labels( i ) )
+   end do
+  end subroutine sort_to_canon_typ
+
+
+  subroutine gram_schmidt(bases)
+  !! orthonormalizes the three vectors given in 'basis' matrix
+  !! -------------------
+  !! on input, vector 'bases' matrix contains noncollinear vectors
+   implicit none
+   real, dimension(3,3), intent(inout) :: bases
+   integer :: i,j
+   real, dimension(3) :: A,B,C
+  
+   A = bases(1,:)
+!write(*,*) 'from GS'
+   B = bases(2,:)
+   C = bases(3,:)
+!write(*,*) 'A',A
+!write(*,*) 'B',B
+!write(*,*) 'C',C
+   bases(1,:) = A(:)/norm(A(:))
+!write(*,*) 'bases1',bases(1,:)
+   bases(2,:) = B(:)
+   bases(2,:) = bases(2,:) - inner_prod(B(:),bases(1,:))*bases(1,:)
+   bases(2,:) = bases(2,:) / norm(bases(2,:))
+!write(*,*) 'bases2',bases(2,:)
+!   bases(3,:) = cross(bases(1,:),bases(2,:))   
+!   bases(3,:) = bases(3,:) / norm(bases(3,:))
+   bases(3,:) = C(:)
+   bases(3,:) = bases(3,:) - inner_prod(C(:),bases(2,:))*bases(2,:)! -&
+!                             inner_prod(C(:),bases(1,:))*bases(1,:)
+!! apparently this normalization causes trouble (not anymore!)
+!write(*,*) 'bases3',bases(3,:)
+   bases(3,:) = bases(3,:) / norm(bases(3,:))
+!write(*,*) 'bases3',bases(3,:)
+
+  end subroutine gram_schmidt
+
+
+ subroutine find_noncollinear_vectors(n,coords,vectors, vector_indeces)
+ !! finds the first three noncollinear vectors from the 'coords' list - these vectors 
+ !! are then used to form the orthonormal basis
+  implicit none
+  integer, intent(in) :: n
+  real, dimension(n,3),intent(in) :: coords
+  real, dimension(3,3),intent(out) :: vectors
+  integer, dimension(3), intent(out) :: vector_indeces
+
+  integer :: i,ii, j, second_idx, third_idx
+  real :: proj, proj2,n1n2,n3n2, margin
+  real, dimension(3) :: partial_vec
+
+  !!!! this has to do with precision used
+  margin = 1.0e-1 
+ 
+! write(*,*) 'coords from routine'
+! do ii=1, n
+!  write(*,*) coords(ii,:)
+! end do
+
+!! first vector is the first in list
+  vectors(1,:) = coords(1,:)
+  vector_indeces(1) = 1
+!write(*,*) 'found first vector:'
+!write(*,*) vectors(1,:)
+  second_idx = 0
+  third_idx = 0
+
+!! finding the second vector
+!! vectors are collinear when scalar productof two vectors equals the product of their
+!! norms.
+  do i = 2, n
+    !! projection (1, i)
+    proj = inner_prod( vectors(1,:), coords(i,:) )
+!write(*,*) 'proj 1,',i,proj
+    !! norm( 1 ) * norm( i )
+    n1n2 = norm( vectors(1,:) ) * norm( coords(i,:) )
+!write(*,*) 'n1n2',n1n2
+!write(*,*) 'proj-n1n2',abs(proj)-n1n2
+    if( abs( abs( proj ) - n1n2) .gt. margin ) then
+       second_idx = i
+       exit
+    endif
+  end do
+  vectors(2,:) = coords(second_idx,:)
+  vector_indeces(2) = second_idx
+!write(*,*) 'chosen second idx from routine',second_idx
+!write(*,*) vectors(2,:)
+
+!! finding third vector, should be non-collinear to first and second vector
+234 continue
+  do i =second_idx, n
+    !! projection (1, i)
+    proj = inner_prod( vectors(1,:), coords(i,:) )
+    !! projection (2, i)
+    proj2 = inner_prod( vectors(2,:), coords(i,:) )
+    !! norm( 1 ) * norm( i )
+    n1n2 = norm( vectors(1,:) ) * norm( coords(i, :) )
+    !! norm( 2 ) * norm( i )
+    n3n2 = norm( vectors(2,:) ) * norm( coords(i, :) )
+    if((abs(abs(proj)-n1n2) .gt. margin) .and. &
+      (abs(abs(proj2)-n3n2) .gt. margin)) then
+       third_idx = i
+       exit
+    endif
+  end do
+!write(*,*) 'chosen third idx from routine', third_idx
+  vectors(3,:) = coords( third_idx, : )
+  vector_indeces(3) = third_idx
+
+!! sanity check third vector ( do partial GS ), reusing variables-dont trust names
+  partial_vec(:) = vectors(3,:) - inner_prod( vectors(3,:),vectors(1,:) )*vectors(1,:)
+  proj = inner_prod( partial_vec(:), vectors(2,:) )
+  n1n2 = norm(partial_vec)*norm(vectors(2,:))
+!write(*,*) 'sanity check vectors'
+!write(*,*) 'vector3',vectors(3,:)
+!write(*,*) 'vector2',vectors(2,:)
+!write(*,*) 'vector1',vectors(1,:)
+!write(*,*) 'partial vec 3- (3,1)1',partial_vec
+!write(*,*) 'proj',proj
+!write(*,*) 'n1n2',n1n2
+  if ( abs ( abs(proj) - n1n2 ) .lt. margin ) then
+   second_idx = second_idx + 1
+   goto 234
+  endif
+
+  partial_vec(:) = vectors(3,:) - inner_prod( vectors(3,:),vectors(2,:) )*vectors(2,:)
+  proj = inner_prod( partial_vec(:), vectors(1,:) )
+  n1n2 = norm(partial_vec)*norm(vectors(1,:))
+  if ( abs ( abs(proj) - n1n2 ) .lt. margin ) then
+   second_idx = second_idx + 1
+   goto 234
+  endif
+
+ end subroutine
+
 
   subroutine read_line(fd, line, end_of_file)
   !--------------------
@@ -86,6 +628,136 @@ module routines
   end subroutine get_nevt
 
 
+  subroutine get_center_of_topology(coords,cot)
+   implicit none
+   real, dimension(:,:), intent(in) :: coords
+   real, dimension(3), intent(out) :: cot
+   integer :: nsites, i
+
+   nsites = size(coords,1)
+   cot(:) = 0.0
+   do i=1, nsites
+      cot(1) = cot(1) + coords(i,1)
+      cot(2) = cot(2) + coords(i,2)
+      cot(3) = cot(3) + coords(i,3)
+   end do
+   cot = cot/nsites
+
+  end subroutine get_center_of_topology
+
+
+  subroutine map_site(isite,Rcut,coords,types,map_coords,map_types,map_indices,nbvertex)
+   implicit none
+   !! extract coords within some Rcut of current site isite,
+   !! and write them in basis of local COM
+   integer :: n !! number of all coords
+   integer :: i,k,j !! counter
+   real :: dist
+   real, dimension(3) :: COM
+
+   real, dimension(:,:), intent(in) :: coords
+   integer, dimension(:), intent(in) :: types
+   real, intent(in) :: Rcut
+   integer, intent(in) :: isite
+   real, allocatable, intent(out) :: map_coords(:,:)
+   integer, allocatable, intent(out) :: map_types(:), map_indices(:)
+   integer, intent(out) :: nbvertex
+
+   n=size(coords,1)
+!do i =1,n
+!write(*,*) coords(i,:)
+!end do
+
+   ! set numbr of vertex within rcut
+   nbvertex = 1
+   do i=1,n
+     if (i==isite) cycle
+     dist = ( coords(isite,1) - coords(i,1) )**2 +&
+            ( coords(isite,2) - coords(i,2) )**2 +&
+            ( coords(isite,3) - coords(i,3) )**2
+     dist = sqrt(dist)
+     nbvertex = nbvertex + NINT(0.5*erfc(dist - Rcut))
+! write(*,*) 'distance',dist, nint(0.5*erfc(dist-Rcut)),nbvertex
+   end do
+write(*,*) 'nbvertex',nbvertex
+
+   allocate(map_coords(1:nbvertex,1:3))
+   allocate(map_indices(1:nbvertex))
+   allocate(map_types(1:nbvertex))
+   map_coords(:,:) = 0.0
+   map_indices(:) = isite
+   map_types(:) = types(isite)
+   !! get distances, if within cutoff, remember the vector and its index
+   k=2
+   do i=1,n
+     if (i==isite) cycle
+     dist = ( coords(isite,1) - coords(i,1) )**2 +&
+            ( coords(isite,2) - coords(i,2) )**2 +&
+            ( coords(isite,3) - coords(i,3) )**2
+     dist = sqrt(dist)
+     if (dist .le. Rcut ) then
+        map_coords(k,:) = coords(i,:)-coords(isite,:)
+!write(*,*) 'from routine'
+!write(*,*) 'map coords',k,(map_coords(k,j),j=1,2)
+        map_indices(k) = i
+        map_types(k) = types(i)
+!write(*,*) 'found neigh',k,'index',i,dist
+        k = k + 1
+     endif
+ 
+   end do
+!write(*,*) 'map from map'
+!do i=1,n
+!write(*,*) map_coords(i,:)
+!end do
+   
+!   call get_center_of_topology(map_coords,COM)
+
+!write(*,*) 'COM from map',COM
+!write(*,*) 'k',k
+
+!   do i=1,k-1
+!      map_coords(i,:) = map_coords(i,:) - COM(:)
+!   end do
+
+!   nat_in_map = k-1
+  end subroutine map_site
+
+  
+  subroutine get_hash_prob_new(fd,hash,prob,event_nat)
+  !! read ordered events for hash and prob
+   implicit none
+   integer, intent(in) :: fd
+   integer, allocatable,intent(out) :: hash(:)
+   real,allocatable,intent(out) :: prob(:)
+   integer, allocatable, intent(out) :: event_nat(:)
+
+   logical :: eof
+   character(len=256) :: line
+   integer :: nevt,ievt
+
+   read(fd,*) nevt
+   allocate(hash(1:nevt))
+   allocate(prob(1:nevt))
+   allocate(event_nat(1:nevt))
+
+   eof = .false.
+   do while ( .not. eof )
+     call read_line( fd, line, eof )
+     line = trim ( adjustl ( line ) )
+     if ( line(1:1) == '@' ) then
+       line = trim ( adjustl ( line(2:) ) )   !! to get rid of '@' and possible spaces
+       read(line,*) ievt
+       read(fd,*) prob(ievt)
+       read(fd,*) event_nat(ievt)
+       read(fd,*) hash(ievt)
+     endif
+   end do
+!   rewind(fd)
+
+  end subroutine get_hash_prob_new
+
+
   subroutine get_hash_prob(fd,hash1,hash2,prob,nevt)
   !-----------------------
   ! parse through the event input file and extract the total number of events.
@@ -142,7 +814,7 @@ module routines
 
 
   subroutine get_ev_coord( fd, ev_idx, ev_init_nat, ev_init_typ, ev_init_coord, &
-                                       ev_final_nat, ev_final_typ, ev_final_coord )
+                                       ev_final_nat, ev_final_typ, ev_final_coord, prob )
   !-------------------------------------
   ! extract the initial and final coordinates of the chosen event
   !-------------------------------------
@@ -158,10 +830,12 @@ module routines
    integer, intent(in) :: ev_idx
    character(len=256) :: line
    logical :: eof
+   real :: dum
    integer :: ievt, i
    integer, intent(out) :: ev_init_nat, ev_final_nat
    integer, allocatable, intent(out) :: ev_init_typ(:), ev_final_typ(:)
    real, allocatable, intent(out) :: ev_init_coord(:,:), ev_final_coord(:,:)
+   real, intent(out) :: prob
 
 !!!! this still relies on the events being tagged by numbers e.g. @3
 !! could introduce a counter on events...more simple
@@ -169,7 +843,10 @@ module routines
    do while (.not. eof)
      call read_line(fd,line,eof)
      line = trim ( adjustl (line) )
-     if ( line(1:1) == '@' ) read(line(2:),*) ievt
+     if ( line(1:1) == '@' ) then
+        read(line(2:),*) ievt
+        read(fd,*) dum, dum, prob
+     endif
      !!! get the wanted event given by ev_idx
      if (ievt == ev_idx) then
        do while (.not.eof)
